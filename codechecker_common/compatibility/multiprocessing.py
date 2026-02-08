@@ -20,11 +20,18 @@ if sys.platform in ["darwin", "win32"]:
         cpu_count
     from multiprocess.managers import SyncManager
 else:
+    import multiprocessing as _mp
     from concurrent.futures import ProcessPoolExecutor as Pool
-    from multiprocessing import \
-        Pipe, \
-        Process, \
-        Queue, \
-        Value, \
-        cpu_count
+
+    # Python 3.14+ changed the default multiprocessing start method on Linux
+    # from "fork" to "forkserver". The "forkserver" method requires all
+    # objects passed to child processes to be picklable, which fails for
+    # objects containing SQLAlchemy engines/sessions with unpicklable
+    # closures. Explicitly use the "fork" context to maintain compatibility.
+    _ctx = _mp.get_context("fork")
+    Pipe = _ctx.Pipe
+    Process = _ctx.Process
+    Queue = _ctx.Queue
+    Value = _ctx.Value
+    cpu_count = _mp.cpu_count
     from multiprocessing.managers import SyncManager
