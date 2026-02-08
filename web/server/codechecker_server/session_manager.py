@@ -549,6 +549,14 @@ class SessionManager:
         """ Get default superuser name. """
         return self.__auth_config['super_user']
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state['_SessionManager__database_connection'] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
     def set_database_connection(self, connection):
         """
         Set the instance's database connection to use in fetching

@@ -69,6 +69,14 @@ class TaskManager:
 
         os.makedirs(self._temp_dir_root, exist_ok=True)
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state['_database_factory'] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
     @property
     def configuration_database_session_factory(self):
         """

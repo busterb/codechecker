@@ -662,6 +662,13 @@ class CCSimpleHttpServer(HTTPServer):
         self.address, self.port = server_address
         self.__products = {}
 
+        # Retain parameters needed to reconstruct unpicklable objects
+        # in child processes (for forkserver/spawn multiprocessing).
+        self._product_db_sql_server = product_db_sql_server
+        self._task_pipes = task_pipes
+        self._server_shutdown_flag = server_shutdown_flag
+        self._machine_id = machine_id
+
         # Create a database engine for the configuration database.
         LOG.debug("Creating database engine for CONFIG DATABASE...")
         self.__engine = product_db_sql_server.create_engine()
@@ -733,6 +740,42 @@ class CCSimpleHttpServer(HTTPServer):
         # For this reason, we will update the port variable after server
         # ininitialisation.
         self.port = self.socket.getsockname()[1]
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Exclude unpicklable SQLAlchemy engine/session objects and
+        # related attributes. These are reconstructed in __setstate__.
+        state['_CCSimpleHttpServer__engine'] = None
+        state['config_session'] = None
+        state['cfg_sess_private'] = None
+        state['_CCSimpleHttpServer__products'] = {}
+        state['task_manager'] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
+        # Reconstruct database engine and session from the stored
+        # SQL server configuration object.
+        self.__engine = self._product_db_sql_server.create_engine()
+        self.config_session = sessionmaker(bind=self.__engine)
+        self.manager.set_database_connection(self.config_session)
+
+        # Reconstruct the task manager.
+        self.task_manager = BackgroundTaskManager(
+            self.__task_queue, self._task_pipes, self.config_session,
+            self.check_env, self._server_shutdown_flag, self._machine_id,
+            pathlib.Path(self.context.codechecker_workspace))
+
+        # Reload products from the config database.
+        cfg_sess = self.config_session()
+        try:
+            products = cfg_sess.query(ORMProduct).all()
+            for product in products:
+                self.add_product(product)
+        finally:
+            cfg_sess.commit()
+            cfg_sess.close()
 
     @property
     def formatted_address(self) -> str:
