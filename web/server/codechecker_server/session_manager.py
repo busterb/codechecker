@@ -554,9 +554,6 @@ class SessionManager:
         state['_SessionManager__database_connection'] = None
         return state
 
-    def __setstate__(self, state):
-        self.__dict__.update(state)
-
     def set_database_connection(self, connection):
         """
         Set the instance's database connection to use in fetching

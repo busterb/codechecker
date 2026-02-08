@@ -22,7 +22,8 @@ if sys.platform in ["darwin", "win32"]:
 else:
     from concurrent.futures import ProcessPoolExecutor as Pool
     from multiprocessing import \
-        Pipe, Process, \
+        Pipe, \
+        Process, \
         Queue, \
         Value, \
         cpu_count

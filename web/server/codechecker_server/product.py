@@ -60,17 +60,6 @@ class Product:
 
         self.__last_connect_attempt = None
 
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state['_Product__engine'] = None
-        state['_Product__session'] = None
-        return state
-
-    def __setstate__(self, state):
-        self.__dict__.update(state)
-        if self.__connection_string:
-            self.connect()
-
     @property
     def id(self):
         return self.__id

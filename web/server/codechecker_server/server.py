@@ -662,26 +662,20 @@ class CCSimpleHttpServer(HTTPServer):
         self.address, self.port = server_address
         self.__products = {}
 
-        # Retain parameters needed to reconstruct unpicklable objects
-        # in child processes (for forkserver/spawn multiprocessing).
+        # Store parameters needed to create a database session for the
+        # configuration database in child processes.
         self._product_db_sql_server = product_db_sql_server
         self._task_pipes = task_pipes
         self._server_shutdown_flag = server_shutdown_flag
         self._machine_id = machine_id
-
-        # Create a database engine for the configuration database.
-        LOG.debug("Creating database engine for CONFIG DATABASE...")
-        self.__engine = product_db_sql_server.create_engine()
-        self.config_session = sessionmaker(bind=self.__engine)
-        self.manager.set_database_connection(self.config_session)
-
         self.__task_queue = task_queue
-        self.task_manager = BackgroundTaskManager(
-            task_queue, task_pipes, self.config_session, self.check_env,
-            server_shutdown_flag, machine_id,
-            pathlib.Path(self.context.codechecker_workspace))
 
-        # Load the initial list of products and set up the server.
+        # Create database connections (engine, session, task manager)
+        # and load products from the config database.
+        self._create_db_connections()
+
+        # Initialise permissions — only needed on first server start,
+        # not in child processes (which go through __setstate__).
         cfg_sess = self.config_session()
         permissions.initialise_defaults('SYSTEM', {
             'config_db_session': cfg_sess
@@ -741,10 +735,47 @@ class CCSimpleHttpServer(HTTPServer):
         # ininitialisation.
         self.port = self.socket.getsockname()[1]
 
+    def _create_db_connections(self):
+        """
+        Create the config database engine, session factory, task manager,
+        and reload products.
+
+        Everything here is derived from ``_product_db_sql_server`` and other
+        stored config that survives pickling.  Both ``__init__`` and
+        ``__setstate__`` call this so that child processes (spawned via
+        forkserver/spawn) reconstruct their own DB connections.
+        """
+        LOG.debug("Creating database engine for CONFIG DATABASE...")
+        self.__engine = self._product_db_sql_server.create_engine()
+        self.config_session = sessionmaker(bind=self.__engine)
+        self.manager.set_database_connection(self.config_session)
+
+        self.task_manager = BackgroundTaskManager(
+            self.__task_queue, self._task_pipes, self.config_session,
+            self.check_env, self._server_shutdown_flag, self._machine_id,
+            pathlib.Path(self.context.codechecker_workspace))
+
+        cfg_sess = self.config_session()
+        try:
+            products = cfg_sess.query(ORMProduct).all()
+            for product in products:
+                self.add_product(product)
+        finally:
+            cfg_sess.commit()
+            cfg_sess.close()
+
     def __getstate__(self):
+        """
+        Serialization boundary for forkserver/spawn multiprocessing.
+
+        The server is pickled when passed to API worker processes (via
+        ``target=http_server.serve_forever_...``).  SQLAlchemy engines,
+        session factories, products, and the task manager contain
+        unpicklable objects (e.g. NullPool._creator closures), so they
+        are excluded here and reconstructed in ``__setstate__`` via
+        ``_create_db_connections()``.
+        """
         state = self.__dict__.copy()
-        # Exclude unpicklable SQLAlchemy engine/session objects and
-        # related attributes. These are reconstructed in __setstate__.
         state['_CCSimpleHttpServer__engine'] = None
         state['config_session'] = None
         state['cfg_sess_private'] = None
@@ -754,28 +785,7 @@ class CCSimpleHttpServer(HTTPServer):
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-
-        # Reconstruct database engine and session from the stored
-        # SQL server configuration object.
-        self.__engine = self._product_db_sql_server.create_engine()
-        self.config_session = sessionmaker(bind=self.__engine)
-        self.manager.set_database_connection(self.config_session)
-
-        # Reconstruct the task manager.
-        self.task_manager = BackgroundTaskManager(
-            self.__task_queue, self._task_pipes, self.config_session,
-            self.check_env, self._server_shutdown_flag, self._machine_id,
-            pathlib.Path(self.context.codechecker_workspace))
-
-        # Reload products from the config database.
-        cfg_sess = self.config_session()
-        try:
-            products = cfg_sess.query(ORMProduct).all()
-            for product in products:
-                self.add_product(product)
-        finally:
-            cfg_sess.commit()
-            cfg_sess.close()
+        self._create_db_connections()
 
     @property
     def formatted_address(self) -> str:
